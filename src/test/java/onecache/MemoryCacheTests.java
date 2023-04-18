@@ -3,15 +3,58 @@ package onecache;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
-import java.time.Clock;
-import java.time.Instant;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
+import java.time.*;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 class MemoryCacheTests {
+
+    static class ManualTriggerScheduler implements Scheduler {
+        private List<Runnable> scheduledTask = new ArrayList<>();
+
+        @Override
+        public Runnable RunOnceAfter(Runnable func, long delayMS) {
+            scheduledTask.add(func);
+            return () -> scheduledTask.remove(func);
+        }
+
+        public void triggerAll() {
+            for (Runnable runnable: scheduledTask) {
+                runnable.run();
+            }
+        }
+    }
+
+    static class CustomClock extends Clock {
+        private Instant currentIntent;
+
+        CustomClock(Instant initialInstant) {
+            this.currentIntent = initialInstant;
+        }
+
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return currentIntent;
+        }
+
+        public void advance(Duration duration) {
+            currentIntent = currentIntent.plus(duration);
+        }
+    }
 
     private void assertNotInCache(MemoryCache cache, String key) {
         CacheResult result = cache.get(key);
@@ -135,8 +178,95 @@ class MemoryCacheTests {
      * TODO: Test expiry.
      */
     @Test
-    @Disabled
     void expiry() {
         // TODO: Implement!
+        MemoryCache<String> cache = new MemoryCache();
+
+
+        String a = "A";
+        String b = "B";
+        String c = "C";
+
+        cache.set("a", a, 100);
+        cache.set("b", b, 200);
+        cache.set("c", c); // Never Expire
+
+        try {
+            Thread.sleep(150);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        assertNotInCache(cache, "a");
+        assertCachedEquals(cache, "b", b);
+        assertCachedEquals(cache, "c", c);
+
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        assertNotInCache(cache, "a");
+        assertNotInCache(cache, "b");
+        assertCachedEquals(cache, "c", c);
+    }
+
+    @Test
+    void expiryWithCapacity() {
+        // TODO: Implement!
+        MemoryCache<String> cache = new MemoryCache<>(3);
+
+
+        String a = "A";
+        String b = "B";
+        String c = "C";
+        String d = "D";
+
+        cache.set("a", a, 100);
+        cache.set("b", b, 200);
+        cache.set("c", c); // Never Expire
+
+        try {
+            Thread.sleep(150);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        assertNotInCache(cache, "a");
+        assertCachedEquals(cache, "b", b);
+        assertCachedEquals(cache, "c", c);
+
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        assertNotInCache(cache, "a");
+        assertNotInCache(cache, "b");
+        assertCachedEquals(cache, "c", c);
+    }
+
+    @Test
+    void autoEvictionOfExpiredItems() {
+        CustomClock clock = new CustomClock(Instant.now());
+        ManualTriggerScheduler scheduler = new ManualTriggerScheduler();
+        MemoryCache<String> cache = new MemoryCache<>(0, clock, scheduler);
+
+
+        String a = "A";
+        String b = "B";
+        String c = "C";
+
+        cache.set("a", a, 100);
+        cache.set("b", b, 200);
+        cache.set("c", c); // Never Expire
+
+        scheduler.triggerAll();
+
+        assertNotInCache(cache, "a");
+        assertNotInCache(cache, "b");
+        assertCachedEquals(cache, "c", c);
     }
 }

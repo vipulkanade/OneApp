@@ -27,10 +27,16 @@ public class MemoryCache<T> implements Cache<T> {
     private class Item {
         final String key;
         final T value;
+        final long expiration;
 
-        private Item(String key, T value) {
+        private Item(String key, T value, long exp) {
             this.key = key;
             this.value = value;
+            this.expiration = exp;
+        }
+
+        boolean isExpired() {
+            return expiration > 0 && System.currentTimeMillis() >= expiration;
         }
     }
 
@@ -66,6 +72,10 @@ public class MemoryCache<T> implements Cache<T> {
         Item item = this.itemsByKey.get(key);
 
         // TODO: Check for expiry, and clear if expired.
+        if (item.isExpired()) {
+            clear(key);
+            return new CacheResult<T>(false, null);
+        }
 
         // Mark as most recently read.
         this.mostRecentlyReadKeys.remove(key);
@@ -98,9 +108,20 @@ public class MemoryCache<T> implements Cache<T> {
     public synchronized void set(String key, T value, long expireAfterMS) {
         // Add item.
         // TODO: Store expiry too, and clear when expired.
-        Item item = new Item(key, value);
+        long expiration = expireAfterMS > 0 ? System.currentTimeMillis() + expireAfterMS : 0;
+        Item item = new Item(key, value, expiration);
         this.mostRecentlyReadKeys.addFirst(key);
         this.itemsByKey.put(key, item);
+
+        if (expireAfterMS > 0) {
+            scheduler.RunOnceAfter(() -> {
+                synchronized (this) {
+                    if (itemsByKey.containsKey(key) && itemsByKey.get(key).isExpired()) {
+                        clear(key);
+                    }
+                }
+            }, expireAfterMS);
+        }
 
         // If we're over capacity, evict least recently read items.
         while (this.maxItems > 0 && this.itemsByKey.size() > this.maxItems) {
